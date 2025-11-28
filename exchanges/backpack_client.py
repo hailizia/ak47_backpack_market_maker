@@ -155,7 +155,8 @@ class BackpackClient(object):
                 order_type=OrderTypeEnum.MARKET,
                 quantity=str(align_quantity),
                 post_only=False,
-                time_in_force=order_type
+                time_in_force=order_type,
+                reduce_only=True
             )
 
             self.logger.info(
@@ -253,7 +254,8 @@ class BackpackClient(object):
                 order_type=OrderTypeEnum.MARKET,
                 quantity=str(align_quantity),
                 post_only=False,
-                time_in_force=order_type
+                time_in_force=order_type,
+                reduce_only=True
             )
 
             self.logger.info(
