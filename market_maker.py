@@ -499,12 +499,17 @@ class ProfessionalMarketMaker:
             # 执行真实对冲订单
             if self.real_q > 0:
                 # 卖出对冲
-                await self.exchange_client.place_sell_market_order(
+                order_id = await self.exchange_client.place_sell_market_order(
                     self.contract_id, hedge_size_sol)  # 略低于市价
             else:
                 # 买入对冲
-                await self.exchange_client.place_buy_market_order(
+                order_id = await self.exchange_client.place_buy_market_order(
                     self.contract_id, hedge_size_sol)  # 略高于市价
+
+            self.logger.info(
+                f'Market Order ID: {order_id}, '
+                f'contract id: {self.contract_id}, '
+                f'hedge size sol: {hedge_size_sol}')
 
         except Exception as e:
             self.logger.error(f"对冲执行失败: {e}")
