@@ -180,7 +180,12 @@ class ProfessionalMarketMaker:
         # 创建交易所客户端
         try:
             # public_key, secret_key, ticker
-            self.exchange_client = BackpackClient(config.public_key, config.secret_key, config.ticker)
+            self.exchange_client = BackpackClient(
+                config.public_key,
+                config.secret_key,
+                config.ticker,
+                config.market_type
+            )
             self.order_manager = OrderManager(self.exchange_client, config, logger)
         except ValueError as e:
             raise ValueError(f"创建交易所客户端失败: {e}")
@@ -608,6 +613,7 @@ if __name__ == "__main__":
 
     _config = TradingConfig(
         ticker=backpack_ticker,
+        market_type=backpack_market_type,
         public_key=backpack_public_key,
         secret_key=backpack_secret_key
     )

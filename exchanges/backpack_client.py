@@ -40,11 +40,12 @@ class CustomAccountClient:
 
 class BackpackClient(object):
 
-    def __init__(self, public_key, secret_key, ticker):
+    def __init__(self, public_key, secret_key, ticker, market_type='PERP'):
         self.public_key = public_key
         self.secret_key = secret_key
 
         self.ticker = ticker
+        self.market_type = market_type
 
         if not self.public_key or not self.secret_key:
             raise ValueError("BACKPACK_PUBLIC_KEY and BACKPACK_SECRET_KEY must be set in environment variables")
@@ -375,7 +376,8 @@ class BackpackClient(object):
 
         min_quantity = 0
         for market in markets:
-            if (market.get('marketType', '') == 'PERP' and market.get('baseSymbol', '') == ticker and
+            if (market.get('marketType', '') == self.market_type and
+                    market.get('baseSymbol', '') == ticker and
                     market.get('quoteSymbol', '') == 'USDC'):
                 self.logger.info(f'get contract attributes, ticker: {ticker}, market: {market}')
                 self.contract_id = market.get('symbol', '')
@@ -385,7 +387,9 @@ class BackpackClient(object):
                 break
 
         self.logger.info(
-            f'contract id: {self.contract_id}, min quantity: {min_quantity}, '
+            f'contract id: {self.contract_id}, '
+            f'market type: {self.market_type}, '
+            f'min quantity: {min_quantity}, '
             f'tick size: {self.tick_size}')
 
         if self.contract_id == '':

@@ -26,7 +26,12 @@ class TradingBot:
         self.config = config
         self.logger = logger
 
-        self.exchange_client = BackpackClient(config.public_key, config.secret_key, config.ticker)
+        self.exchange_client = BackpackClient(
+            config.public_key,
+            config.secret_key,
+            config.ticker,
+            config.market_type
+        )
 
         # Trading state
         self.active_close_orders = []
@@ -284,6 +289,7 @@ class TradingBot:
 if __name__ == '__main__':
     _config = TradingConfig(
         ticker=backpack_ticker,
+        market_type=backpack_market_type,
         public_key=backpack_public_key,
         secret_key=backpack_secret_key
     )

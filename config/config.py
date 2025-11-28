@@ -6,6 +6,10 @@ backpack_ticker = 'BNB'
 backpack_public_key = '<替换成自己的Key>'
 backpack_secret_key = '<替换自己的Secret>'
 
+# 默认是合约，如果想支持现货，需要改成是：SPOT
+backpack_market_type = 'PERP'
+
+
 # 报价大小建议
 
 backpack_base_order_size_usd = 100
