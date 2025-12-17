@@ -23,6 +23,7 @@ class TradingBot:
             direction: str = 'buy',
             max_orders: int = 10,
             grid_price_factor: float = 1.5,
+            grid_base_spacing: float = 0.01,
             grid_quantity_factor: float = 1.5
     ):
         self.config = config
@@ -54,6 +55,14 @@ class TradingBot:
 
         # 网格价格因子和数量因子，如果改成为1，就变成是普通网格。
         self.grid_price_factor = grid_price_factor
+        self.grid_base_spacing = grid_base_spacing
+
+        if self.grid_base_spacing <= 0 or self.grid_base_spacing >= 1:
+            self.grid_base_spacing = 0.01
+
+        if self.grid_price_factor <= 1:
+            self.grid_price_factor = 1
+
         self.grid_quantity_factor = grid_quantity_factor
 
         self.contract_id = None
@@ -85,12 +94,18 @@ class TradingBot:
 
             avg_price = await self.get_latest_avg_price()
 
+            tmp_grid_price_factor = 0
             for i in range(self.max_orders):
                 curr_quantity = self.quantity * (self.grid_quantity_factor ** i)
+
+                curr_grid_price_factor = tmp_grid_price_factor + self.grid_price_factor ** i
+
                 if self.direction == 'buy':
-                    order_price = round(float(avg_price) * (1 - self.take_profit * (self.grid_price_factor ** i)), 2)
+                    order_price = round(float(avg_price) * (1 - self.grid_base_spacing * curr_grid_price_factor), 2)
                 else:
-                    order_price = round(float(avg_price) * (1 + self.take_profit * (self.grid_price_factor ** i)), 2)
+                    order_price = round(float(avg_price) * (1 + self.grid_base_spacing * curr_grid_price_factor), 2)
+
+                tmp_grid_price_factor = curr_grid_price_factor
 
                 if self.direction == 'buy':
                     await self.exchange_client.place_buy_limit_order(
@@ -364,6 +379,12 @@ if __name__ == '__main__':
     )
 
     parser.add_argument(
+        "-gb", "--grid-base-spacing",
+        default=0.01,
+        help="grid price base spacing"
+    )
+
+    parser.add_argument(
         "-gp", "--grid-price-factor",
         default=1.5,
         help="grid price factor"
@@ -404,6 +425,7 @@ if __name__ == '__main__':
     _max_orders = int(args.max_orders)
 
     _grid_price_factor = float(args.grid_price_factor)
+    _grid_base_spacing = float(args.grid_base_spacing)
     _grid_quantity_factor = float(args.grid_quantity_factor)
 
     _take_profit = float(args.take_profit)
@@ -437,6 +459,7 @@ if __name__ == '__main__':
         direction=_direction,
         max_orders=_max_orders,
         grid_price_factor=_grid_price_factor,
+        grid_base_spacing=_grid_base_spacing,
         grid_quantity_factor=_grid_quantity_factor
     )
 
