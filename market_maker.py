@@ -10,6 +10,7 @@ from typing import Tuple, Optional, Dict
 from config.config import *
 
 import numpy as np
+import argparse
 
 from exchanges.backpack_client import BackpackClient
 from helpers.logger import setup_logger
@@ -563,6 +564,8 @@ class ProfessionalMarketMaker:
         recent_returns = []
         t = 0.03  # 30ms循环，避免过频
 
+        reinit_q_max = False
+
         while True:
             try:
                 # 获取市场数据
@@ -587,6 +590,20 @@ class ProfessionalMarketMaker:
                 s = (max_bid + min_ask) / 2.0
                 self.current_spread = min_ask - max_bid
 
+                if not reinit_q_max:
+                    if self.risk_params.base_order_size_usd <= 10:
+                        self.risk_params.base_order_size_usd = 50
+
+                    self.risk_params.risk_threshold = self.risk_params.base_order_size_usd * 5 / s
+                    self.risk_params.Q_max = self.risk_params.risk_threshold * 2
+
+                    self.dynamic_gamma = self.risk_params.gamma
+                    self.dynamic_Q_max = self.risk_params.Q_max
+
+                    reinit_q_max = True
+
+                    self.logger.info(f'重新调整参数，当前参数如下。 Risk params: {self.risk_params}')
+
                 # 更新价格序列
                 if self.price_log:
                     recent_returns.append(np.log(s / self.price_log[-1]))
@@ -606,16 +623,74 @@ class ProfessionalMarketMaker:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Backpack market maker strategy",
+        epilog="example: python3 market_maker.py --ticker ETH --market-type PERP --key xxx --secret xxx --order-size 50"
+    )
+
+    # 添加可选参数
+    parser.add_argument(
+        "-t", "--ticker",
+        default=backpack_ticker,
+        help="ticker: such as ETH"
+    )
+
+    parser.add_argument(
+        "-m", "--market-type",
+        choices=['PERP', 'SPOT'],
+        default=backpack_market_type,
+        help="PERP, SPOT"
+    )
+
+    parser.add_argument(
+        "-k", "--key",
+        default=backpack_public_key,
+        help="API Key"
+    )
+
+    parser.add_argument(
+        "-s", "--secret",
+        default=backpack_secret_key,
+        help="API Secret"
+    )
+
+    parser.add_argument(
+        "-o", "--order-size",
+        default=backpack_base_order_size_usd,
+        help="Order size per trade"
+    )
+
+    # 解析参数
+    args = parser.parse_args()
+    logger.info("args:")
+    for arg_name, arg_value in vars(args).items():
+        logger.info(f"  {arg_name}: {arg_value}")
+
+    _ticker = args.ticker
+    _market_type = args.market_type
+    _public_key = args.key
+    _secret_key = args.secret
+    _base_order_size_usd = float(args.order_size)
+
+    logger.info(
+        f'finished init market maker config, '
+        f'ticker: {_ticker}, '
+        f'market type: {_market_type}, '
+        f'public key: {_public_key}, '
+        f'public secret: {_secret_key}, '
+        f'base order size usd: {_base_order_size_usd}')
+
+    # backpack_Q_max, backpack_risk_threshold 这两个参数会在程序中重新调整，忽略它们。
     params = RiskParameters(
         Q_max=backpack_Q_max,
         risk_threshold=backpack_risk_threshold,
-        base_order_size_usd=backpack_base_order_size_usd)
+        base_order_size_usd=_base_order_size_usd)
 
     _config = TradingConfig(
-        ticker=backpack_ticker,
-        market_type=backpack_market_type,
-        public_key=backpack_public_key,
-        secret_key=backpack_secret_key
+        ticker=_ticker,
+        market_type=_market_type,
+        public_key=_public_key,
+        secret_key=_secret_key
     )
 
     mm = ProfessionalMarketMaker(risk_params=params, config=_config)

@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 
+import argparse
 import asyncio
-import time
-from collections import deque
-from dataclasses import dataclass
-from decimal import Decimal
-from enum import Enum
-from typing import Tuple, Optional, Dict
-from config.config import *
 import random
-import numpy as np
+from decimal import Decimal
 
+from config.config import *
 from exchanges.backpack_client import BackpackClient
 from helpers.logger import setup_logger
 from model.trading_config import TradingConfig
@@ -89,7 +84,8 @@ class ProfessionalMarketTaker:
                 self.logger.info(f'get account position, real q: {self.real_q}')
 
                 if abs(self.real_q) >= self.min_quantity:
-                    order_id = await self.exchange_client.close_position_with_market_order(self.contract_id, self.real_q)
+                    order_id = await self.exchange_client.close_position_with_market_order(self.contract_id,
+                                                                                           self.real_q)
 
                     self.logger.info(
                         f'close current position, contract id: {self.contract_id}, '
@@ -125,12 +121,72 @@ class ProfessionalMarketTaker:
 
 
 if __name__ == "__main__":
-    _config = TradingConfig(
-        ticker=backpack_ticker,
-        market_type=backpack_market_type,
-        public_key=backpack_public_key,
-        secret_key=backpack_secret_key
+    # 创建 ArgumentParser 对象
+    parser = argparse.ArgumentParser(
+        description="Backpack all taker strategy",
+        epilog="example: python3 bp_market_taker.py --ticker ETH --market-type PERP --key xxx --secret xxx --order-size 50"
     )
 
-    mm = ProfessionalMarketTaker(config=_config, base_order_size_usd=backpack_base_order_size_usd)
+    # 添加可选参数
+    parser.add_argument(
+        "-t", "--ticker",
+        default=backpack_ticker,
+        help="ticker: such as ETH"
+    )
+
+    parser.add_argument(
+        "-m", "--market-type",
+        choices=['PERP', 'SPOT'],
+        default=backpack_market_type,
+        help="PERP, SPOT"
+    )
+
+    parser.add_argument(
+        "-k", "--key",
+        default=backpack_public_key,
+        help="API Key"
+    )
+
+    parser.add_argument(
+        "-s", "--secret",
+        default=backpack_secret_key,
+        help="API Secret"
+    )
+
+    parser.add_argument(
+        "-o", "--order-size",
+        default=backpack_base_order_size_usd,
+        help="Order size per trade"
+    )
+
+    # 解析参数
+    args = parser.parse_args()
+
+    # 打印解析结果
+    logger.info("args:")
+    for arg_name, arg_value in vars(args).items():
+        logger.info(f"  {arg_name}: {arg_value}")
+
+    _ticker = args.ticker
+    _market_type = args.market_type
+    _key = args.key
+    _secret = args.secret
+    _size_usd = float(args.order_size)
+
+    logger.info(
+        f'finished init bp market taker config, '
+        f'ticker: {_ticker}, '
+        f'market type: {_market_type}, '
+        f'public key: {_key}, '
+        f'public secret: {_secret}, '
+        f'base order size usd: {_size_usd}')
+
+    _config = TradingConfig(
+        ticker=_ticker,
+        market_type=_market_type,
+        public_key=_key,
+        secret_key=_secret
+    )
+
+    mm = ProfessionalMarketTaker(config=_config, base_order_size_usd=_size_usd)
     asyncio.run(mm.run())

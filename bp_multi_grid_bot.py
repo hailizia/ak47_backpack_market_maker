@@ -4,6 +4,7 @@ from decimal import Decimal
 import asyncio
 import time
 import traceback
+import argparse
 from config.config import *
 from exchanges.backpack_client import BackpackClient
 from helpers.logger import setup_logger
@@ -16,8 +17,9 @@ class TradingBot:
     def __init__(
             self,
             config: TradingConfig,
-            quantity: float = 0.1,
+            base_order_amount: float = 40,
             take_profit: float = 0.1 / 100,
+            stop_loss: float = 0.10,
             direction: str = 'buy',
             max_orders: int = 10,
             grid_price_factor: float = 1.5,
@@ -33,12 +35,17 @@ class TradingBot:
             config.market_type
         )
 
+        self.balance = None
+
         # Trading state
         self.active_close_orders = []
         self.last_close_orders = 0
 
-        self.quantity = round(quantity, 4)
+        self.base_order_amount = base_order_amount
+        self.quantity = None
+
         self.take_profit = take_profit
+        self.stop_loss = stop_loss
         self.direction = direction
         self.max_orders = max_orders
 
@@ -53,6 +60,22 @@ class TradingBot:
         self.tick_size = None
         self.min_quantity = None
 
+    async def get_latest_avg_price(self):
+        bids, asks = await self.exchange_client.get_latest_bids_asks(self.contract_id)
+
+        bids = [float(b[0]) for b in bids[-5:]] if bids else []
+        asks = [float(a[0]) for a in asks[:5]] if asks else []
+
+        if not bids or not asks:
+            self.logger.warning("买卖盘数据不完整，跳过")
+            await asyncio.sleep(0.1)
+            return False
+
+        min_ask = min(asks)
+        max_bid = max(bids)
+        avg_price = (max_bid + min_ask) / 2.0
+        return avg_price
+
     async def place_all_open_orders(self) -> bool:
         """Place an order and monitor its execution."""
         try:
@@ -60,19 +83,7 @@ class TradingBot:
                 f'place open order, contract id: {self.contract_id}, '
                 f'quantity: {self.quantity}, direction: {self.direction}')
 
-            bids, asks = await self.exchange_client.get_latest_bids_asks(self.contract_id)
-
-            bids = [float(b[0]) for b in bids[-5:]] if bids else []
-            asks = [float(a[0]) for a in asks[:5]] if asks else []
-
-            if not bids or not asks:
-                self.logger.warning("买卖盘数据不完整，跳过")
-                await asyncio.sleep(0.1)
-                return False
-
-            min_ask = min(asks)
-            max_bid = max(bids)
-            avg_price = (max_bid + min_ask) / 2.0
+            avg_price = await self.get_latest_avg_price()
 
             for i in range(self.max_orders):
                 curr_quantity = self.quantity * (self.grid_quantity_factor ** i)
@@ -245,21 +256,35 @@ class TradingBot:
             except Exception as e:
                 self.logger.warning(f'exception in cancel order: {e}')
 
+    async def check_and_reset_quantity(self):
+        if self.quantity is None:
+            current_avg_price = await self.get_latest_avg_price()
+            self.quantity = max(self.min_quantity, self.base_order_amount / current_avg_price)
+
+
     async def run(self):
         """Main trading loop."""
         try:
             self.contract_id, self.tick_size, self.min_quantity = await self.exchange_client.update_contract_attributes()
 
+            self.balance = self.exchange_client.get_account_balance()
+
+            await self.check_and_reset_quantity()
+
             self.logger.info(
                 f'trade direct: {self.direction}, '
                 f'contract id: {self.contract_id}, '
-                f'tick size: {self.tick_size}')
+                f'tick size: {self.tick_size}, '
+                f'base trade size: {self.base_order_amount}, '
+                f'base trade quantity: {self.quantity}')
 
             sleep_times = 30
             await self.close_all_active_open_orders()
 
             while True:
                 try:
+                    await self.check_and_reset_quantity()
+
                     active_order_count = self.get_active_open_order_count()
                     position_amt, position_entry_price = self.exchange_client.get_account_positions()
                     if abs(position_amt) < self.min_quantity:
@@ -287,31 +312,128 @@ class TradingBot:
 
 
 if __name__ == '__main__':
-    _config = TradingConfig(
-        ticker=backpack_ticker,
-        market_type=backpack_market_type,
-        public_key=backpack_public_key,
-        secret_key=backpack_secret_key
+    parser = argparse.ArgumentParser(
+        description="Backpack multi grid bot strategy",
+        epilog="example: python3 bp_multi_grid_bot.py --ticker ETH --market-type PERP --key xxx "
+               "--secret xxx --order-size 50 --direction buy --max-orders 10 --grid-price-factor 1.5 "
+               "--grid-quantity-factor 1.5 --take-profit 0.0001"
     )
 
-    # 默认其实仓位为0.1个，你需要根据你自己实际情况来设置
-    _quantity = 0.001
+    # 添加可选参数
+    parser.add_argument(
+        "-t", "--ticker",
+        default=backpack_ticker,
+        help="ticker: such as ETH"
+    )
 
-    # 目标赚万分之二，你可以设置成任何你想要的
-    _take_profit = 2 / 10000
+    parser.add_argument(
+        "-m", "--market-type",
+        choices=['PERP', 'SPOT'],
+        default=backpack_market_type,
+        help="PERP, SPOT"
+    )
 
-    # 默认为做多网格，如果想设置成做空网格，可以把这个值设置为sell
-    _direction = 'buy'
-    _max_orders = 10
+    parser.add_argument(
+        "-k", "--key",
+        default=backpack_public_key,
+        help="API Key"
+    )
 
-    _grid_price_factor = 1.5
-    _grid_quantity_factor = 1.5
+    parser.add_argument(
+        "-s", "--secret",
+        default=backpack_secret_key,
+        help="API Secret"
+    )
 
-    # Create and run the bot
+    parser.add_argument(
+        "-o", "--order-size",
+        default=backpack_base_order_size_usd,
+        help="Order size per trade"
+    )
+
+    parser.add_argument(
+        "-d", "--direction",
+        default='buy',
+        help="buy: 做多, sell: 做空"
+    )
+
+    parser.add_argument(
+        "-max", "--max-orders",
+        default=10,
+        help="max orders"
+    )
+
+    parser.add_argument(
+        "-gp", "--grid-price-factor",
+        default=1.5,
+        help="grid price factor"
+    )
+
+    parser.add_argument(
+        "-gq", "--grid-quantity-factor",
+        default=1.5,
+        help="grid quantity factor"
+    )
+
+    parser.add_argument(
+        "-tp", "--take-profit",
+        default=2 / 10000,
+        help="take profit"
+    )
+
+    parser.add_argument(
+        "-sl", "--stop-loss",
+        default=0.10,
+        help="stop loss"
+    )
+
+    # 解析参数
+    args = parser.parse_args()
+
+    # 打印解析结果
+    logger.info("args:")
+    for arg_name, arg_value in vars(args).items():
+        logger.info(f"  {arg_name}: {arg_value}")
+
+    _ticker = args.ticker
+    _market_type = args.market_type
+    _public_key = args.key
+    _secret_key = args.secret
+    _quantity = float(args.order_size)
+    _direction = args.direction
+    _max_orders = int(args.max_orders)
+
+    _grid_price_factor = float(args.grid_price_factor)
+    _grid_quantity_factor = float(args.grid_quantity_factor)
+
+    _take_profit = float(args.take_profit)
+    _stop_loss = float(args.stop_loss)
+
+    logger.info(
+        f'finished init grid config, ticker: {_ticker}, '
+        f':market type: {_market_type}, '
+        f'public key: {_public_key}, '
+        f'secret key: {_secret_key}, '
+        f'quantity: {_quantity}, '
+        f'direction: {_direction}, '
+        f'max orders: {_max_orders}, '
+        f'grid price factor: {_grid_price_factor}, '
+        f'grid quantity factor: {_grid_quantity_factor}, '
+        f'take profit: {_take_profit}, '
+        f'stop loss: {_stop_loss}')
+
+    _config = TradingConfig(
+        ticker=_ticker,
+        market_type=_market_type,
+        public_key=_public_key,
+        secret_key=_secret_key
+    )
+
     bot = TradingBot(
         _config,
-        quantity=_quantity,
+        base_order_amount=_quantity,
         take_profit=_take_profit,
+        stop_loss=_stop_loss,
         direction=_direction,
         max_orders=_max_orders,
         grid_price_factor=_grid_price_factor,

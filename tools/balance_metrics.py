@@ -25,6 +25,8 @@ async def core():
     (contract_id, tick_size, min_quantity) = await exchange_client.update_contract_attributes()
 
     balance = await exchange_client.get_account_balance()
+    print(f'balance: {balance}')
+
     avail_balance = balance['USDC']['available']
 
     history_trades = []

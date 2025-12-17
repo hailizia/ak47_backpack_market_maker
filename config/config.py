@@ -16,5 +16,7 @@ backpack_market_type = 'PERP'
 # 报价大小建议
 
 backpack_base_order_size_usd = 100
+
+# 以下两个字不用调整，做市策略会在运行时自动决定。
 backpack_risk_threshold = 0.5
 backpack_Q_max = 1.0
