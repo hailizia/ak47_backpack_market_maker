@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
-from typing import List, Tuple
+from typing import List, Tuple, Dict
+import asyncio
 
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
@@ -40,11 +41,12 @@ class CustomAccountClient:
 
 class BackpackClient(object):
 
-    def __init__(self, public_key, secret_key, ticker):
+    def __init__(self, public_key, secret_key, ticker, market_type='PERP'):
         self.public_key = public_key
         self.secret_key = secret_key
 
         self.ticker = ticker
+        self.market_type = market_type
 
         if not self.public_key or not self.secret_key:
             raise ValueError("BACKPACK_PUBLIC_KEY and BACKPACK_SECRET_KEY must be set in environment variables")
@@ -91,6 +93,56 @@ class BackpackClient(object):
 
     async def get_recent_trades(self, contract_id, limit):
         return self.public_client.get_recent_trades(contract_id, limit)
+
+    async def get_account_balance(self):
+        return self.account_client.get_balances()
+
+    async def get_historic_trade(self, contract_id):
+        all_trades = []
+        start_idx = 0
+        length = 1000
+        while True:
+            try:
+                current_trades = self.account_client.get_fill_history(
+                    contract_id,
+                    length,
+                    start_idx
+                )
+
+                if isinstance(current_trades, list):
+                    start_idx += len(current_trades)
+                    all_trades.extend(current_trades)
+                elif isinstance(current_trades, dict) and 'code' in current_trades:
+                    print(f'start index: {start_idx}, len: {len(current_trades)}, {current_trades}')
+
+                print(f'start index: {start_idx}, len: {len(current_trades)}')
+
+                if len(current_trades) < length:
+                    break
+
+                await asyncio.sleep(5)
+
+            except Exception as e:
+                self.logger.warning(f'exception in process history record: {e}')
+
+        return all_trades
+
+    async def get_account_all_positions(self) -> List[Dict]:
+        account_positions = []
+        positions_data = None
+        try:
+            positions_data = self.account_client.get_open_positions()
+            for position in positions_data:
+                account_positions.append({
+                    'symbol': position.get('symbol', ''),
+                    'netQuantity': Decimal(position.get('netQuantity', 0))
+                })
+        except Exception as e:
+            self.logger.info(
+                f'exception in get account all positions: {e}, '
+                f'positions data: {positions_data}')
+
+        return account_positions
 
     async def place_sell_limit_order(self, contract_id, order_price, quantity, order_type=TimeInForceEnum.GTC):
         self.logger.info(
@@ -157,6 +209,11 @@ class BackpackClient(object):
                 post_only=False,
                 time_in_force=order_type
             )
+
+            self.logger.info(
+                f'sell market order execute result: {order_result},'
+                f'contract id: {contract_id}, '
+                f'quantity: {quantity}')
 
             if not order_result:
                 self.logger.info(
@@ -225,6 +282,57 @@ class BackpackClient(object):
 
         return None
 
+    async def close_position_with_market_order(self, contract_id, real_position):
+        quantity = abs(real_position)
+        side = 'Bid' if real_position < 0 else 'Ask'
+
+        self.logger.info(
+            f'close position with market order, contract id: {contract_id}, '
+            f'real position: {real_position}, '
+            f'quantity: {quantity}, '
+            f'side: {side}')
+
+        try:
+            align_quantity = BackpackClient.align_floor(quantity, self.min_quantity)
+        except Exception as e:
+            self.logger.warning(
+                f'exception in align: {e}, quantity: {quantity}, min quantity: {self.min_quantity}')
+            align_quantity = round(quantity, 4)
+
+        try:
+            order_result = self.custom_client.execute_order(
+                symbol=contract_id,
+                side=side,
+                order_type=OrderTypeEnum.MARKET,
+                quantity=str(align_quantity),
+                post_only=False,
+                reduce_only=True
+            )
+
+            self.logger.info(
+                f'buy market order execute result: {order_result},'
+                f'contract id: {contract_id}, '
+                f'quantity: {quantity}')
+
+            if not order_result:
+                self.logger.info(
+                    f'exception in place order, symbol: {contract_id}, '
+                    f'quantity: {align_quantity}, ')
+
+            if 'code' in order_result:
+                message = order_result.get('message', 'Unknown error')
+                self.logger.warning(f"[OPEN] Error placing order: {message}")
+                return
+
+            order_id = order_result.get('id')
+            if not order_id:
+                self.logger.error(f"[OPEN] No order ID in response: {order_result}")
+            return order_id
+        except Exception as e:
+            self.logger.info(f'exception in batch place orders: {e}')
+
+        return None
+
     async def place_buy_market_order(
             self, contract_id, quantity,
             order_type=TimeInForceEnum.GTC):
@@ -250,6 +358,11 @@ class BackpackClient(object):
                 post_only=False,
                 time_in_force=order_type
             )
+
+            self.logger.info(
+                f'buy market order execute result: {order_result},'
+                f'contract id: {contract_id}, '
+                f'quantity: {quantity}')
 
             if not order_result:
                 self.logger.info(
@@ -334,19 +447,25 @@ class BackpackClient(object):
         except Exception:
             return []
 
-    async def get_account_positions(self) -> Decimal:
-        try:
-            positions_data = self.account_client.get_open_positions()
-            position_amt = 0
-            for position in positions_data:
-                if position.get('symbol', '') == self.contract_id:
-                    position_amt = Decimal(position.get('netQuantity', 0))
-                    break
-            return position_amt
-        except Exception as e:
-            self.logger.warning(f'exception in get account positions: {e}')
+    def get_account_positions(self) -> Tuple[Decimal, Decimal]:
+        """Get account positions using official SDK."""
+        position_amt = 0
+        position_entry_price = 0
+        positions_data = None
+        for i in range(30):
+            try:
+                positions_data = self.account_client.get_open_positions()
+                for position in positions_data:
+                    if position.get('symbol', '') == self.contract_id:
+                        position_amt = Decimal(position.get('netQuantity', 0))
+                        position_entry_price = abs(Decimal(position.get('entryPrice', 0)))
+                        break
 
-        raise Exception(f'failed to get position')
+                return position_amt, position_entry_price
+            except Exception as e:
+                print(f'exception in get account positions: {e}, position data: {positions_data}')
+
+        return position_amt, position_entry_price
 
     async def update_contract_attributes(self) -> Tuple[str, Decimal, Decimal]:
         """Get contract ID for a ticker."""
@@ -359,7 +478,8 @@ class BackpackClient(object):
 
         min_quantity = 0
         for market in markets:
-            if (market.get('marketType', '') == 'PERP' and market.get('baseSymbol', '') == ticker and
+            if (market.get('marketType', '') == self.market_type and
+                    market.get('baseSymbol', '') == ticker and
                     market.get('quoteSymbol', '') == 'USDC'):
                 self.logger.info(f'get contract attributes, ticker: {ticker}, market: {market}')
                 self.contract_id = market.get('symbol', '')
@@ -369,7 +489,9 @@ class BackpackClient(object):
                 break
 
         self.logger.info(
-            f'contract id: {self.contract_id}, min quantity: {min_quantity}, '
+            f'contract id: {self.contract_id}, '
+            f'market type: {self.market_type}, '
+            f'min quantity: {min_quantity}, '
             f'tick size: {self.tick_size}')
 
         if self.contract_id == '':
